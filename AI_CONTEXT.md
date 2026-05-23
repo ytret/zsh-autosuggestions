@@ -8,9 +8,8 @@ Implemented a new `zsh-autosuggestions` strategy called `histdb_fish_like` that 
 
 | File | Description |
 |------|-------------|
-| `src/strategies/histdb_fish_like.zsh` | Strategy implementation (77 lines) |
+| `src/strategies/histdb_fish_like.zsh` | Strategy implementation (81 lines) |
 | `zsh-autosuggestions.zsh` | Built plugin bundle (regenerated via `make`) |
-| `AI_PLAN.md` | Original implementation plan (reference only) |
 
 ## Architecture
 
@@ -20,7 +19,7 @@ prefix → SQLite query with Fish-like scoring → best match via typeset -g sug
 
 The strategy is a single function `_zsh_autosuggest_strategy_histdb_fish_like` that delegates all scoring to SQLite. It uses a three-level subquery:
 
-1. **Inner**: Gets up to `max_rows` (default 500) candidate `command_id`s matching `prefix%`, with aggregates (count, max start_time) and correlated subqueries for cwd match, parent dir match, and last exit status
+1. **Inner**: Gets up to `max_rows` (default 500) most recent candidate `command_id`s matching `prefix%` (ordered by `max_start DESC`), with aggregates (count, max start_time) and correlated subqueries for cwd match, parent dir match, and last exit status
 2. **Middle**: Computes a composite score for each candidate
 3. **Outer**: Filters by `min_score`, joins to `commands` for argv, returns top 1
 
@@ -46,7 +45,7 @@ score = cwd_weight * cwd_match
 | `ZSH_AUTOSUGGEST_HISTDB_SUCCESS_WEIGHT` | 10 | Boost for exit_status = 0 |
 | `ZSH_AUTOSUGGEST_HISTDB_FAILURE_PENALTY` | 15 | Penalty for exit_status != 0 |
 | `ZSH_AUTOSUGGEST_HISTDB_MIN_SCORE` | 10 | Minimum score threshold |
-| `ZSH_AUTOSUGGEST_HISTDB_MAX_ROWS` | 500 | Max rows for inner query LIMIT |
+| `ZSH_AUTOSUGGEST_HISTDB_MAX_ROWS` | 500 | Max rows for inner query (most recent candidates) |
 | `ZSH_AUTOSUGGEST_HISTDB_RECENCY_HALFLIFE` | 604800 | Recency half-life in seconds (1 week) |
 
 ## Dependencies
@@ -65,13 +64,15 @@ ZSH_AUTOSUGGEST_STRATEGY=(histdb_fish_like history)
 
 ## Defensive Behaviors
 
-- Silently returns empty if `_histdb_query` function is not defined
+- Silently returns empty if `_histdb_query` or `sql_escape` function is not defined
 - Silently returns empty if `HISTDB_FILE` is not set
+- Silently returns empty if `$prefix` is empty (avoids full table scan)
 - Post-filters result to ensure it starts with the typed prefix
 - Respects `ZSH_AUTOSUGGEST_HISTORY_IGNORE` glob pattern
 - Score below `min_score` is filtered in SQL (outer WHERE clause)
+- `suggestion` is explicitly set to empty on all failure paths so stale values don't leak
 
-## Out of Scope (per AI_PLAN.md)
+## Out of Scope
 
 - Completion integration
 - Git/branch awareness
@@ -80,6 +81,5 @@ ZSH_AUTOSUGGEST_STRATEGY=(histdb_fish_like history)
 
 ## Known Issues / Future Work
 
-- **Correlated subqueries** for `cwd_match` and `parent_dir_match` may be slow on very large histories (>100k rows). If so, rewrite them as JOINs or use `EXISTS` (already using `SELECT 1 ... LIMIT 1` which is equivalent).
+- **Correlated subqueries** for `cwd_match` and `parent_match` may be slow on very large histories (>100k rows). If so, rewrite them as JOINs or use `EXISTS` (already using `SELECT 1 ... LIMIT 1` which is equivalent).
 - **Recency decay** uses a linear approximation (`MAX(0, 1 - elapsed/halflife)`) instead of true exponential decay. SQLite3 has `exp()` but it may not be available in all builds.
-- **Empty prefix** is handled gracefully (LIKE `'%%'` matches everything) but zsh-autosuggestions typically doesn't call strategies with empty buffers.
