@@ -15,8 +15,10 @@ _zsh_autosuggest_strategy_histdb_fish_like() {
 
 	local prefix="$1"
 
-	(( ${+functions[_histdb_query]} )) || return
-	[[ -n "${HISTDB_FILE}" ]] || return
+	(( ${+functions[_histdb_query]} )) || { typeset -g suggestion=""; return }
+	[[ -n "${HISTDB_FILE}" ]] || { typeset -g suggestion=""; return }
+	(( ${+functions[sql_escape]} )) || { typeset -g suggestion=""; return }
+	[[ -n "$prefix" ]] || { typeset -g suggestion=""; return }
 
 	local escaped_prefix="$(sql_escape "$prefix")"
 	local escaped_pwd="$(sql_escape "$PWD")"
@@ -50,12 +52,13 @@ _zsh_autosuggest_strategy_histdb_fish_like() {
 					MAX(history.start_time) AS max_start,
 					(SELECT h2.exit_status FROM history h2 WHERE h2.command_id = history.command_id ORDER BY h2.start_time DESC LIMIT 1) AS last_status,
 					(SELECT 1 FROM history h3 JOIN places p3 ON h3.place_id = p3.id WHERE h3.command_id = history.command_id AND p3.dir = '${escaped_pwd}' LIMIT 1) AS cwd_match,
-					(SELECT 1 FROM history h4 JOIN places p4 ON h4.place_id = p4.id WHERE h4.command_id = history.command_id AND p4.dir LIKE '${escaped_parent_dir}/%' LIMIT 1) AS parent_match
+					(SELECT 1 FROM history h4 JOIN places p4 ON h4.place_id = p4.id WHERE h4.command_id = history.command_id AND p4.dir = '${escaped_parent_dir}' LIMIT 1) AS parent_match
 				FROM history
 				JOIN commands ON history.command_id = commands.id
 				JOIN places ON history.place_id = places.id
 				WHERE commands.argv LIKE '${escaped_prefix}%'
 				GROUP BY history.command_id
+				ORDER BY max_start DESC
 				LIMIT ${max_rows}
 			)
 			ORDER BY score DESC
@@ -67,9 +70,10 @@ _zsh_autosuggest_strategy_histdb_fish_like() {
 
 	local result="$(_histdb_query "$query")"
 
-	[[ "$result" == "$prefix"* ]] || return
+	[[ "$result" == "$prefix"* ]] || { typeset -g suggestion=""; return }
 
 	if [[ -n "$ZSH_AUTOSUGGEST_HISTORY_IGNORE" ]] && [[ "$result" == ${~ZSH_AUTOSUGGEST_HISTORY_IGNORE} ]]; then
+		typeset -g suggestion=""
 		return
 	fi
 
